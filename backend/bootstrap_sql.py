@@ -1,3 +1,4 @@
+
 import os, asyncio, asyncpg
 
 DDL_CREATE = [
@@ -6,9 +7,11 @@ DDL_CREATE = [
         api_key TEXT NOT NULL,
         title TEXT NOT NULL,
         phone TEXT,
+        city TEXT,
+        address TEXT,
+        geo TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
     )""",
-
     """CREATE TABLE IF NOT EXISTS foody_offers (
         id TEXT PRIMARY KEY,
         restaurant_id TEXT NOT NULL REFERENCES foody_restaurants(id) ON DELETE CASCADE,
@@ -25,28 +28,26 @@ DDL_CREATE = [
 ]
 
 DDL_ALTER = [
-    "ALTER TABLE IF EXISTS foody_restaurants ADD COLUMN IF NOT EXISTS phone TEXT",
+    "ALTER TABLE IF EXISTS foody_restaurants ADD COLUMN IF NOT EXISTS city TEXT",
+    "ALTER TABLE IF EXISTS foody_restaurants ADD COLUMN IF NOT EXISTS address TEXT",
+    "ALTER TABLE IF EXISTS foody_restaurants ADD COLUMN IF NOT EXISTS geo TEXT",
     "ALTER TABLE IF EXISTS foody_offers ADD COLUMN IF NOT EXISTS original_price_cents INTEGER",
     "ALTER TABLE IF EXISTS foody_offers ADD COLUMN IF NOT EXISTS price_cents INTEGER",
     "ALTER TABLE IF EXISTS foody_offers ADD COLUMN IF NOT EXISTS qty_left INTEGER",
     "ALTER TABLE IF EXISTS foody_offers ADD COLUMN IF NOT EXISTS qty_total INTEGER",
     "ALTER TABLE IF EXISTS foody_offers ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
-    "ALTER TABLE IF EXISTS foody_offers ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ"
+    "ALTER TABLE IF EXISTS foody_offers ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ",
 ]
 
 async def run():
-    url = os.getenv("DATABASE_URL")
-    if not url:
-        print("BOOTSTRAP: DATABASE_URL not set, skip")
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        print("BOOTSTRAP: DATABASE_URL not set")
         return
-    conn = await asyncpg.connect(url)
+    conn = await asyncpg.connect(db_url)
     try:
         for sql in DDL_CREATE:
-            try:
-                await conn.execute(sql)
-                print("BOOTSTRAP CREATE OK")
-            except Exception as e:
-                print("BOOTSTRAP CREATE WARN:", repr(e))
+            await conn.execute(sql)
         for sql in DDL_ALTER:
             try:
                 await conn.execute(sql)

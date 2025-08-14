@@ -1,8 +1,11 @@
-import os, io, csv, json, secrets, datetime as dt
+
+import os
+import secrets
+import datetime as dt
 from typing import Optional, Dict, Any, List
 
 import asyncpg
-from fastapi import FastAPI, Header, HTTPException, Query, Body, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 
@@ -35,10 +38,24 @@ async def pool() -> asyncpg.pool.Pool:
 
 def rid() -> str:
     return "RID_" + secrets.token_hex(4)
+
 def apikey() -> str:
     return "KEY_" + secrets.token_hex(8)
+
 def offid() -> str:
     return "OFF_" + secrets.token_hex(6)
+
+def row_restaurant(r: asyncpg.Record) -> Dict[str, Any]:
+    return {
+        "id": r["id"],
+        "api_key": r.get("api_key"),
+        "title": r["title"],
+        "phone": r.get("phone"),
+        "city": r.get("city"),
+        "address": r.get("address"),
+        "geo": r.get("geo"),
+        "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+    }
 
 def row_offer(r: asyncpg.Record) -> Dict[str, Any]:
     return {
@@ -65,74 +82,65 @@ async def auth(conn: asyncpg.Connection, key: str, restaurant_id: Optional[str])
     return r["id"] if r else ""
 
 @app.on_event("startup")
-async def _startup():
-    # Run migrations
+async def on_startup():
     bootstrap_sql.ensure()
-    # Seed data if needed
-    try:
-        p = await pool()
-        async with p.acquire() as conn:
-            await seed_if_needed(conn)
-    except Exception as e:
-        print("Startup seed warn:", repr(e))
-
-@app.middleware("http")
-async def guard(request: Request, call_next):
-    try:
-        resp = await call_next(request)
-        return resp
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
+    # Optionally seed demo data if empty
+    async with (await pool()).acquire() as conn:
+        cnt = await conn.fetchval("SELECT COUNT(*) FROM foody_restaurants")
+        if cnt == 0:
+            rid_test = "RID_TEST"
+            key_test = "KEY_TEST"
+            await conn.execute(
+                "INSERT INTO foody_restaurants(id, api_key, title, phone) VALUES($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",
+                rid_test, key_test, "Тестовая Пекарня", "+7 900 000-00-00"
+            )
+            # Add a few demo offers
+            now = dt.datetime.utcnow()
+            demo = [
+                ("Эклеры", "Набор свежих эклеров", 19900, 34900, 5, 5, now + dt.timedelta(minutes=110)),
+                ("Пирожки", "Пирожки с мясом", 14900, 29900, 8, 8, now + dt.timedelta(minutes=55)),
+                ("Круассаны", "Круассаны с маслом", 9900, 32900, 6, 6, now + dt.timedelta(minutes=25)),
+            ]
+            for title, desc, price, orig, qty_left, qty_total, expires in demo:
+                await conn.execute(
+                    """INSERT INTO foody_offers(id, restaurant_id, title, description, price_cents, original_price_cents,
+                                                qty_left, qty_total, expires_at)
+                       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+                    offid(), rid_test, title, desc, price, orig, qty_left, qty_total, expires
+                )
 
 @app.get("/health")
 async def health():
-    # Try to ping DB, but don't fail hard
-    try:
-        p = await pool()
-        async with p.acquire() as conn:
-            await conn.execute("SELECT 1")
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    return {"ok": True, "version": "mvp-fixed"}
+
+# ---- Merchant APIs ----
 
 @app.post("/api/v1/merchant/register_public")
-async def register_public(raw: Request):
-    try:
-        if raw.headers.get("content-type","").startswith("application/json"):
-            data = await raw.json()
-        else:
-            txt = await raw.body()
-            data = json.loads((txt or b"{}").decode("utf-8"))
-    except Exception:
-        data = {}
-    title = (data.get("title") or "").strip()
-    phone = (data.get("phone") or "").strip() or None
+async def register_public(body: Dict[str, Any] = Body(...)):
+    title = (body.get("title") or "").strip()
+    phone = (body.get("phone") or "").strip() or None
     if not title:
-        raise HTTPException(422, "title is required")
-    p = await pool()
-    async with p.acquire() as conn:
+        raise HTTPException(400, "title is required")
+    async with (await pool()).acquire() as conn:
         rid_new = rid()
         key_new = apikey()
         await conn.execute(
             "INSERT INTO foody_restaurants(id, api_key, title, phone) VALUES($1,$2,$3,$4)",
             rid_new, key_new, title, phone
         )
-    return {"restaurant_id": rid_new, "api_key": key_new}
+        r = await conn.fetchrow("SELECT * FROM foody_restaurants WHERE id=$1", rid_new)
+        return {"ok": True, "restaurant": row_restaurant(r), "api_key": key_new}
 
 @app.get("/api/v1/merchant/profile")
-async def get_profile(restaurant_id: str, x_foody_key: str = Header(default="")):
-    p = await pool()
-    async with p.acquire() as conn:
-        rid_ok = await auth(conn, x_foody_key, restaurant_id)
-        if not rid_ok:
+async def get_profile(restaurant_id: str = Query(...), x_foody_key: str = Header(default="")):
+    async with (await pool()).acquire() as conn:
+        rid_auth = await auth(conn, x_foody_key, restaurant_id)
+        if not rid_auth:
             raise HTTPException(401, "Invalid API key or restaurant_id")
-        r = await conn.fetchrow("SELECT id, title, phone, city, address, geo FROM foody_restaurants WHERE id=$1", restaurant_id)
+        r = await conn.fetchrow("SELECT * FROM foody_restaurants WHERE id=$1", restaurant_id)
         if not r:
             raise HTTPException(404, "Restaurant not found")
-        return {"id": r["id"], "title": r["title"], "phone": r["phone"], "city": r["city"], "address": r["address"], "geo": r["geo"]}
+        return row_restaurant(r)
 
 @app.post("/api/v1/merchant/profile")
 async def set_profile(body: Dict[str, Any] = Body(...), x_foody_key: str = Header(default="")):
@@ -143,204 +151,90 @@ async def set_profile(body: Dict[str, Any] = Body(...), x_foody_key: str = Heade
     address = (body.get("address") or "").strip() or None
     geo = (body.get("geo") or "").strip() or None
     if not rid_in:
-        raise HTTPException(422, "restaurant_id is required")
-    p = await pool()
-    async with p.acquire() as conn:
-        rid_ok = await auth(conn, x_foody_key, rid_in)
-        if not rid_ok:
+        raise HTTPException(400, "restaurant_id is required")
+    async with (await pool()).acquire() as conn:
+        rid_auth = await auth(conn, x_foody_key, rid_in)
+        if not rid_auth:
             raise HTTPException(401, "Invalid API key or restaurant_id")
         await conn.execute(
-            "UPDATE foody_restaurants SET title=COALESCE($1,title), phone=$2, city=$3, address=$4, geo=$5 WHERE id=$6",
-            title, phone, city, address, geo, rid_in
+            """UPDATE foody_restaurants
+               SET title=COALESCE($2,title), phone=$3, city=$4, address=$5, geo=$6
+               WHERE id=$1""",
+            rid_in, title, phone, city, address, geo
         )
-    return {"ok": True}
-
-@app.get("/api/v1/merchant/offers")
-async def merchant_offers(restaurant_id: str, status: Optional[str] = None, x_foody_key: str = Header(default="")):
-    p = await pool()
-    async with p.acquire() as conn:
-        rid_ok = await auth(conn, x_foody_key, restaurant_id)
-        if not rid_ok:
-            raise HTTPException(401, "Invalid API key or restaurant_id")
-        where = ["restaurant_id=$1"]
-        params: List[Any] = [restaurant_id]
-        if status == "active":
-            where.append("(archived_at IS NULL)")
-            where.append("(expires_at IS NULL OR expires_at > NOW())")
-            where.append("(qty_left IS NULL OR qty_left > 0)")
-        sql = f"SELECT * FROM foody_offers WHERE {' AND '.join(where)} ORDER BY expires_at NULLS LAST, id"
-        rows = await conn.fetch(sql, *params)
-        return [row_offer(r) for r in rows]
+        r = await conn.fetchrow("SELECT * FROM foody_restaurants WHERE id=$1", rid_in)
+        return {"ok": True, "restaurant": row_restaurant(r)}
 
 @app.post("/api/v1/merchant/offers")
 async def create_offer(body: Dict[str, Any] = Body(...), x_foody_key: str = Header(default="")):
     rid_in = (body.get("restaurant_id") or "").strip()
-    p = await pool()
-    async with p.acquire() as conn:
-        rid_ok = await auth(conn, x_foody_key, rid_in)
-        if not rid_ok:
+    if not rid_in:
+        raise HTTPException(400, "restaurant_id is required")
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "title is required")
+    description = (body.get("description") or "").strip() or None
+    price_cents = int(body.get("price_cents") or 0)
+    original_price_cents = int(body.get("original_price_cents") or 0) or None
+    qty_total = int(body.get("qty_total") or 0)
+    qty_left = int(body.get("qty_left") or qty_total)
+    expires_at_raw = body.get("expires_at")
+    expires_at = None
+    if expires_at_raw:
+        try:
+            expires_at = dt.datetime.fromisoformat(expires_at_raw.replace("Z","+00:00"))
+        except Exception:
+            raise HTTPException(400, "expires_at must be ISO8601")
+
+    async with (await pool()).acquire() as conn:
+        rid_auth = await auth(conn, x_foody_key, rid_in)
+        if not rid_auth:
             raise HTTPException(401, "Invalid API key or restaurant_id")
         oid = offid()
-        title = (body.get("title") or "").strip()
-        if not title:
-            raise HTTPException(422, "title is required")
-        description = (body.get("description") or None)
-        price_cents = int(body.get("price_cents") or 0)
-        original_price_cents = int(body.get("original_price_cents") or 0) or None
-        qty_total = int(body.get("qty_total") or 0)
-        qty_left = int(body.get("qty_left") or qty_total)
-        expires_at = body.get("expires_at")
-        expires_ts = None
-        if expires_at:
-            try:
-                expires_ts = dt.datetime.fromisoformat(expires_at.replace("Z","+00:00"))
-            except Exception:
-                raise HTTPException(422, "expires_at must be ISO8601")
         await conn.execute(
             """INSERT INTO foody_offers(id, restaurant_id, title, description, price_cents, original_price_cents,
                                         qty_left, qty_total, expires_at)
                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
-            oid, rid_in, title, description, price_cents, original_price_cents, qty_left, qty_total, expires_ts
+            oid, rid_in, title, description, price_cents, original_price_cents, qty_left, qty_total, expires_at
         )
         r = await conn.fetchrow("SELECT * FROM foody_offers WHERE id=$1", oid)
-        return row_offer(r)
-
-@app.delete("/api/v1/merchant/offers/{offer_id}")
-async def delete_offer(offer_id: str, restaurant_id: Optional[str] = None, x_foody_key: str = Header(default="")):
-    p = await pool()
-    async with p.acquire() as conn:
-        rid_ok = await auth(conn, x_foody_key, restaurant_id)
-        if not rid_ok:
-            raise HTTPException(401, "Invalid API key or restaurant_id")
-        chk = await conn.fetchrow("SELECT id, restaurant_id FROM foody_offers WHERE id=$1", offer_id)
-        if not chk:
-            raise HTTPException(404, "Offer not found")
-        if restaurant_id and chk["restaurant_id"] != restaurant_id:
-            raise HTTPException(403, "Offer belongs to another restaurant")
-        await conn.execute("UPDATE foody_offers SET archived_at=NOW() WHERE id=$1", offer_id)
-        return {"ok": True, "deleted": offer_id}
-
-def with_timer_discount(r: Dict[str, Any]) -> Dict[str, Any]:
-    """Compute time-step discount based on expires_at."""
-    out = dict(r)
-    now = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
-    expires_at = None
-    if r["expires_at"]:
-        try:
-            expires_at = dt.datetime.fromisoformat(r["expires_at"].replace("Z","+00:00"))
-        except Exception:
-            expires_at = None
-    step = None
-    discount_percent = 0
-    if expires_at:
-        delta = (expires_at - now).total_seconds() / 60.0
-        if delta <= 30:
-            discount_percent = 70
-            step = "-70%"
-        elif delta <= 60:
-            discount_percent = 50
-            step = "-50%"
-        elif delta <= 120:
-            discount_percent = 30
-            step = "-30%"
-    original = r.get("original_price_cents") or r.get("price_cents")
-    current = r.get("price_cents")
-    if (original and original > 0) and discount_percent > 0:
-        # Override current price according to discount
-        current = int(round(original * (1 - discount_percent/100)))
-    out["timer_discount_percent"] = discount_percent
-    out["timer_step"] = step
-    out["price_cents_effective"] = current
-    return out
-
-@app.get("/api/v1/offers")
-async def public_offers(limit: int = Query(200, ge=1, le=500)):
-    p = await pool()
-    async with p.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT * FROM foody_offers
-               WHERE (archived_at IS NULL)
-                 AND (expires_at IS NULL OR expires_at > NOW())
-                 AND (qty_left IS NULL OR qty_left > 0)
-               ORDER BY expires_at NULLS LAST, id
-               LIMIT $1""", limit
-        )
-        base = [row_offer(r) for r in rows]
-        return [with_timer_discount(o) for o in base]
+        return {"ok": True, "offer": row_offer(r)}
 
 @app.get("/api/v1/merchant/offers/csv")
-async def export_csv(restaurant_id: str):
-    p = await pool()
-    async with p.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM foody_offers WHERE restaurant_id=$1 ORDER BY created_at", restaurant_id)
-    def gen():
+async def export_offers_csv(restaurant_id: str = Query(...), x_foody_key: str = Header(default="")):
+    async with (await pool()).acquire() as conn:
+        rid_auth = await auth(conn, x_foody_key, restaurant_id)
+        if not rid_auth:
+            raise HTTPException(401, "Invalid API key or restaurant_id")
+        rows = await conn.fetch(
+            "SELECT * FROM foody_offers WHERE restaurant_id=$1 ORDER BY created_at DESC", restaurant_id
+        )
+        import io, csv
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["id","restaurant_id","title","description","price_cents","original_price_cents","qty_left","qty_total","expires_at","archived_at","created_at"])
+        w.writerow(["id","title","price_cents","original_price_cents","qty_left","qty_total","expires_at","created_at"])
         for r in rows:
             w.writerow([
-                r["id"], r["restaurant_id"], r["title"], r.get("description") or "",
-                r["price_cents"], r.get("original_price_cents") or "",
+                r["id"], r["title"], r["price_cents"], r.get("original_price_cents"),
                 r["qty_left"], r["qty_total"],
                 r["expires_at"].isoformat() if r.get("expires_at") else "",
-                r["archived_at"].isoformat() if r.get("archived_at") else "",
-                r["created_at"].isoformat() if r.get("created_at") else "",
+                r["created_at"].isoformat() if r.get("created_at") else ""
             ])
-        yield buf.getvalue()
-    return StreamingResponse(gen(), media_type="text/csv",
-                             headers={"Content-Disposition": f"attachment; filename=offers_{restaurant_id}.csv"})
+        buf.seek(0)
+        return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv")
 
-@app.get("/api/v1/merchant/kpi")
-async def kpi(restaurant_id: str, x_foody_key: str = Header(default="")):
-    p = await pool()
-    async with p.acquire() as conn:
-        rid_ok = await auth(conn, x_foody_key, restaurant_id)
-        if not rid_ok:
-            raise HTTPException(401, "Invalid API key or restaurant_id")
-        return {"reserved": 0, "redeemed": 0, "redemption_rate": 0.0, "revenue_cents": 0, "saved_cents": 0}
+# ---- Public APIs ----
 
-@app.post("/api/v1/merchant/redeem")
-async def redeem(body: Dict[str, Any] = Body(...), x_foody_key: str = Header(default="")):
-    return {"ok": False, "detail": "Reservations are not enabled on this server"}
-
-# ---- Seed logic ----
-TEST_RID = "RID_TEST"
-TEST_KEY = "KEY_TEST"
-
-async def seed_if_needed(conn: asyncpg.Connection):
-    # Ensure columns exist (bootstrap_sql already handled)
-    cnt = await conn.fetchval("SELECT COUNT(*) FROM foody_restaurants")
-    has_test = await conn.fetchrow("SELECT id FROM foody_restaurants WHERE id=$1", TEST_RID)
-    if cnt and has_test:
-        return  # already ok
-    if cnt and not has_test:
-        # Clean up old data to avoid conflicts
-        try:
-            await conn.execute("TRUNCATE foody_offers RESTART IDENTITY CASCADE")
-        except Exception:
-            pass
-        try:
-            await conn.execute("TRUNCATE foody_restaurants RESTART IDENTITY CASCADE")
-        except Exception:
-            pass
-    # Insert test restaurant and 3 offers
-    await conn.execute(
-        "INSERT INTO foody_restaurants(id, api_key, title, phone, city, address, geo) VALUES($1,$2,$3,$4,$5,$6,$7)",
-        TEST_RID, TEST_KEY, "Пекарня №1", "+7 900 000-00-00", "Москва", "ул. Пекарная, 10", "55.7558, 37.6173"
-    )
-    now = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)
-    def exp(minutes): return now + dt.timedelta(minutes=minutes)
-    demo = [
-        ("Эклеры", "Набор свежих эклеров", 19900, 34900, 5, 5, exp(110)),  # -30%
-        ("Пирожки", "Пирожки с мясом", 14900, 29900, 8, 8, exp(55)),       # -50%
-        ("Круассаны", "Круассаны с маслом", 9900, 32900, 6, 6, exp(25)),   # -70%
-    ]
-    for title, desc, price, orig, qty_left, qty_total, expires in demo:
-        await conn.execute(
-            """INSERT INTO foody_offers(id, restaurant_id, title, description, price_cents, original_price_cents,
-                                        qty_left, qty_total, expires_at)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
-            offid(), TEST_RID, title, desc, price, orig, qty_left, qty_total, expires
+@app.get("/api/v1/offers")
+async def public_offers(city: Optional[str] = Query(default=None)):
+    async with (await pool()).acquire() as conn:
+        # For MVP, simply list active (non-archived, not expired) offers
+        rows = await conn.fetch(
+            """SELECT * FROM foody_offers
+               WHERE archived_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
+               ORDER BY expires_at NULLS LAST, created_at DESC
+            """
         )
+        return {"offers": [row_offer(r) for r in rows]}
 
 # uvicorn backend.main:app --host 0.0.0.0 --port 8080
