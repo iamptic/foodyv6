@@ -1,4 +1,5 @@
 import os
+import asyncio
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Update
@@ -8,11 +9,11 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 WEBAPP_PUBLIC = os.getenv("WEBAPP_PUBLIC", "")
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 app = FastAPI()
 
-
-@dp.message_handler(commands=["start"])
+# --- Handlers ---
+@dp.message(commands=["start"])
 async def start_handler(message: types.Message):
     await message.answer(
         "Привет! 🎉 Это Foody бот.\n\n"
@@ -20,18 +21,23 @@ async def start_handler(message: types.Message):
         f"Открыть витрину: {WEBAPP_PUBLIC}"
     )
 
-
+# --- Webhook endpoint ---
 @app.post(f"/{WEBHOOK_SECRET}")
 async def telegram_webhook(request: Request):
-    update = Update(**await request.json())
-    await dp.process_update(update)
+    data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
     return {"ok": True}
-
 
 @app.get("/health")
 async def health():
     return {"ok": True}
 
+# --- Startup logic ---
+@app.on_event("startup")
+async def on_startup():
+    # Здесь можно установить webhook через API Telegram, если нужно
+    print("Bot is starting...")
 
 if __name__ == "__main__":
     import uvicorn
