@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'path';
-const app = express();
+import express from 'express';
 const WEB_DIR = path.join(__dirname, 'web');
 const FOODY_API = process.env.FOODY_API || '';
 app.get('/config.js', (req,res) => {
