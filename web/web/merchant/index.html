@@ -20,11 +20,9 @@
     input,textarea,select{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff}
     .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     .btn{background:var(--btn);color:var(--btnfg);border:none;border-radius:10px;padding:10px 14px;cursor:pointer}
-    .muted{font-size:12px;color:var(--muted)}
+    .muted{font-size:12px;color:#666}
     .hidden{display:none !important}
-    details{margin-top:12px}
-    details>summary{cursor:pointer;color:#444}
-    #toast{position:fixed;right:12px;bottom:12px;background:#111;color:#fff;padding:10px 12px;border-radius:10px;display:none;z-index:1000}
+    #toast{position:fixed;right:12px;bottom:12px;background:#111;color:#fff;padding:10px 12px;border-radius:10px;display:none}
   </style>
 </head>
 <body>
@@ -44,7 +42,7 @@
       <label class="muted">Секрет (временно, для MVP)</label>
       <input id="loginSecret" placeholder="RECOVERY_SECRET" />
       <div style="margin-top:10px"><button class="btn" id="btnLogin">Войти</button></div>
-      <div class="muted" style="margin-top:8px">В проде заменим на вход по коду.</div>
+      <div class="muted" style="margin-top:8px">В проде это заменим на вход по коду в Telegram/SMS.</div>
     </div>
 
     <hr style="margin:16px -16px;border:0;border-top:1px solid #eee"/>
@@ -60,17 +58,8 @@
         <div><label>Адрес</label><input id="regAddress" placeholder="Улица, дом"></div>
       </div>
       <div style="margin-top:8px"><button class="btn" id="btnGeo">Определить гео</button></div>
-      <div class="muted" style="margin-top:6px">Маркер можно уточнить на карте после регистрации.</div>
+      <div class="muted" style="margin-top:6px">Точку можно выставить перетаскиванием маркера на карте после регистрации.</div>
       <div style="margin-top:10px"><button class="btn" id="btnRegister">Зарегистрировать</button></div>
-
-      <details>
-        <summary>Техвход (если /recover не поднят)</summary>
-        <div class="row" style="margin-top:8px">
-          <div><label>RID</label><input id="rid"></div>
-          <div><label>KEY</label><input id="key"></div>
-        </div>
-        <div style="margin-top:10px"><button class="btn" id="btnTechLogin">Войти по RID/KEY</button></div>
-      </details>
     </div>
   </div>
 
@@ -84,10 +73,10 @@
       <div><label>Адрес</label><input id="pAddress" placeholder="Улица, дом"></div>
       <div><label>Город</label><input id="pCity" placeholder="Город"></div>
     </div>
-    <!-- lat/lon скрыты из UI -->
+    <!-- lat/lon hidden -->
     <div class="row hidden" id="latlonRow" style="margin-top:8px">
-      <div><label>lat</label><input id="pLat"></div>
-      <div><label>lon</label><input id="pLon"></div>
+      <div><label>Широта (lat)</label><input id="pLat" placeholder="lat"></div>
+      <div><label>Долгота (lon)</label><input id="pLon" placeholder="lon"></div>
     </div>
     <div style="margin-top:10px"><button class="btn" id="btnSaveProfile">Сохранить профиль</button></div>
   </div>
@@ -97,7 +86,7 @@
 
 <script>
 const API = window.FOODY_API || '';
-function toast(s){ const t=document.getElementById('toast'); t.textContent=s; t.style.display='block'; setTimeout(()=>t.style.display='none',2200); }
+function toast(s){ const t=document.getElementById('toast'); t.textContent=s; t.style.display='block'; setTimeout(()=>t.style.display='none',2000); }
 function saveAuth(rid,key){ localStorage.setItem('RID',rid); localStorage.setItem('KEY',key); }
 function auth(){ return {rid:localStorage.getItem('RID'), key:localStorage.getItem('KEY')} }
 
@@ -112,14 +101,6 @@ document.getElementById('btnLogin').onclick = async ()=>{
     saveAuth(j.restaurant_id, j.api_key);
     toast('Вход выполнен'); location.reload();
   }catch(e){ toast(e.message); }
-};
-
-// Tech login (fallback)
-document.getElementById('btnTechLogin').onclick = ()=>{
-  const rid=document.getElementById('rid').value.trim();
-  const key=document.getElementById('key').value.trim();
-  if(!rid||!key){ return toast('Укажите RID и KEY'); }
-  saveAuth(rid,key); toast('Вход выполнен'); location.reload();
 };
 
 // Register
@@ -146,7 +127,7 @@ document.getElementById('btnGeo').onclick = ()=>{
   }, ()=> toast('Нет доступа к гео'));
 };
 
-// Save profile
+// Save profile (uses auth RID/KEY from storage)
 document.getElementById('btnSaveProfile').onclick = async ()=>{
   const {rid,key}=auth(); if(!rid||!key){ return toast('Сначала войдите'); }
   const title=document.getElementById('pTitle').value.trim();
@@ -166,12 +147,14 @@ document.getElementById('btnSaveProfile').onclick = async ()=>{
 // Logout
 document.getElementById('logout').onclick = ()=>{ localStorage.removeItem('RID'); localStorage.removeItem('KEY'); location.reload(); };
 
-// On load
+// On load: hide login if token exists
 (function init(){
   const {rid,key}=auth();
-  if(rid && key){ document.getElementById('loginCard').classList.add('hidden'); }
+  if(rid && key){
+    document.getElementById('loginCard').classList.add('hidden');
+  }
+  // hide lat/lon row by default (we keep values internally if backend returns them)
   document.getElementById('latlonRow').classList.add('hidden');
-  if(!API){ console.warn('FOODY_API is not set in web env. Set FOODY_API=https://<backend-host>'); }
 })();
 </script>
 </body>

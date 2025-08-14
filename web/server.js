@@ -25,7 +25,7 @@ app.get('/config.js', (req,res)=>{
   }
 });
 
-// Static site
+// Static files
 app.use('/web', express.static(path.join(__dirname, 'web'), { maxAge: 0 }));
 
 // Default route
