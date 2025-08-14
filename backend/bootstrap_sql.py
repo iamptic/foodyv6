@@ -58,10 +58,15 @@ async def run():
         await conn.close()
 
 def ensure():
-    if os.getenv("RUN_MIGRATIONS", "0") not in ("1","true","TRUE","yes","on"):
+    if os.getenv("RUN_MIGRATIONS", "0") not in ("1", "true", "TRUE", "yes", "on"):
         print("BOOTSTRAP: RUN_MIGRATIONS disabled")
         return
     try:
-        asyncio.get_event_loop().run_until_complete(run())
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Already in an event loop (e.g., uvicorn on Railway)
+            loop.create_task(run())
+        else:
+            loop.run_until_complete(run())
     except RuntimeError:
         asyncio.run(run())
