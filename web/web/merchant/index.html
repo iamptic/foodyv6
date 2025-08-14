@@ -1,1 +1,123 @@
-<!doctype html><meta charset="utf-8"><script src="/config.js"></script><h1>Foody LK</h1>
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foody — ЛК</title><script src="/config.js"></script>
+<style>
+ body{font-family:Inter,system-ui,Arial,sans-serif;margin:0;background:#0b0c10;color:#eee}
+ header{padding:12px 16px;background:#111;border-bottom:1px solid #222;display:flex;gap:10px;align-items:center}
+ .wrap{max-width:980px;margin:0 auto;padding:16px}
+ .row{display:flex;gap:12px;flex-wrap:wrap}
+ .card{flex:1;min-width:280px;background:#14161a;border:1px solid #1f232a;border-radius:14px;padding:14px}
+ input,button{font:inherit;border-radius:10px;border:1px solid #2a2f38;background:#0f1115;color:#eee;padding:8px 10px}
+ button{cursor:pointer}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+ .title{font-weight:600;margin:0 0 6px}
+ .photo{width:100%;height:140px;background:#0f1115;border:1px solid #2a2f38;border-radius:10px;object-fit:cover;margin-bottom:8px}
+ .strike{opacity:.6;text-decoration:line-through;margin-left:8px;font-size:14px}
+</style>
+<header>
+  <div><b>Foody</b> — ЛК партнёра</div>
+  <div style="margin-left:auto"><a href="/web/buyer/" style="color:#9ecbff">← Витрина</a></div>
+</header>
+<div class="wrap">
+  <div class="row">
+    <div class="card" style="max-width:330px">
+      <div style="font-weight:600;margin-bottom:8px">Вход</div>
+      <div id="loginBox">
+        <input id="rid" placeholder="RID_..." /><br><br>
+        <input id="key" placeholder="KEY_..." /><br><br>
+        <button id="saveBtn">Сохранить</button>
+      </div>
+      <div id="whoami" style="display:none"></div>
+    </div>
+    <div class="card" style="flex:2">
+      <div style="font-weight:600;margin-bottom:8px">Профиль</div>
+      <div class="row" style="gap:8px">
+        <input id="p_title" placeholder="Название *" style="min-width:220px">
+        <input id="p_phone" placeholder="Телефон">
+        <input id="p_city" placeholder="Город">
+        <input id="p_addr" placeholder="Адрес">
+        <input id="p_lat" placeholder="lat">
+        <input id="p_lon" placeholder="lon">
+        <button id="p_save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div style="font-weight:600;margin-bottom:8px">Создать оффер</div>
+    <div class="row" style="gap:8px">
+      <input id="o_title" placeholder="Название *">
+      <input id="o_price_rub" placeholder="Цена ₽ *">
+      <input id="o_orig_rub" placeholder="Старая цена ₽">
+      <input id="o_qty" placeholder="Кол-во *">
+      <input id="o_exp" placeholder="ISO время истечения (UTC)">
+      <input id="o_photo" placeholder="Фото URL (опц.)">
+      <button id="o_btn">Создать</button>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div style="font-weight:600;margin-bottom:8px">Мои офферы</div>
+    <div id="offers" class="grid"></div>
+  </div>
+</div>
+<script>
+const API=(window.foodyApi||'').replace(/\/$/,'');
+const st={ get rid(){return localStorage.getItem('RID')||''}, set rid(v){localStorage.setItem('RID',v)},
+           get key(){return localStorage.getItem('KEY')||''}, set key(v){localStorage.setItem('KEY',v)} };
+function $(id){return document.getElementById(id)}
+function money(c){return (c/100).toLocaleString('ru-RU',{style:'currency',currency:'RUB'})}
+function auth(){return {'X-Foody-Key': st.key}}
+async function loadProfile(){
+  if(!st.rid||!st.key){$('loginBox').style.display='block';$('whoami').style.display='none';return;}
+  const r=await fetch(API+'/api/v1/merchant/profile?restaurant_id='+encodeURIComponent(st.rid),{headers:auth()});
+  if(!r.ok){$('loginBox').style.display='block';$('whoami').style.display='none';return;}
+  const p=await r.json();
+  $('loginBox').style.display='none';$('whoami').style.display='block';
+  $('whoami').innerHTML='<div><b>RID:</b> '+st.rid+'<br><b>KEY:</b> '+st.key+'<br><b>Название:</b> '+(p.title||'')+'</div>';
+  $('p_title').value=p.title||''; $('p_phone').value=p.phone||''; $('p_city').value=p.city||''; $('p_addr').value=p.address||'';
+  $('p_lat').value=p.lat??''; $('p_lon').value=p.lon??'';
+  loadOffers();
+}
+$('saveBtn').onclick=()=>{st.rid=$('rid').value.trim();st.key=$('key').value.trim();loadProfile();};
+$('p_save').onclick=async ()=>{
+  const body={restaurant_id:st.rid,title:$('p_title').value.trim(),phone:$('p_phone').value.trim(),
+              city:$('p_city').value.trim(),address:$('p_addr').value.trim(),lat:$('p_lat').value,lon:$('p_lon').value};
+  await fetch(API+'/api/v1/merchant/profile',{method:'POST',headers:{'Content-Type':'application/json',...auth()},body:JSON.stringify(body)});
+  loadProfile();
+};
+$('o_btn').onclick=async ()=>{
+  const body={restaurant_id:st.rid,title:$('o_title').value.trim(),price:parseFloat($('o_price_rub').value||'0'),
+              original_price:parseFloat($('o_orig_rub').value||'0')||null,qty_total:parseInt($('o_qty').value||'0',10),
+              qty_left:parseInt($('o_qty').value||'0',10),expires_at:$('o_exp').value.trim()||null,photo_url:$('o_photo').value.trim()||null};
+  await fetch(API+'/api/v1/merchant/offers',{method:'POST',headers:{'Content-Type':'application/json',...auth()},body:JSON.stringify(body)});
+  loadOffers();
+};
+async function loadOffers(){
+  const r=await fetch(API+'/api/v1/merchant/offers?restaurant_id='+encodeURIComponent(st.rid)+'&status=active',{headers:auth()});
+  const arr=await r.json(); const el=$('offers'); el.innerHTML='';
+  for(const it of arr){
+    const d=document.createElement('div'); d.className='card';
+    const img = it.photo_url ? '<img class="photo" src="'+it.photo_url+'">' : '';
+    d.innerHTML = img + '<div class="title">'+(it.title||'')+'</div>' +
+      '<div>'+money(it.price_cents)+(it.original_price_cents?'<span class="strike">'+money(it.original_price_cents)+'</span>':'')+'</div>'+
+      '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button data-id="'+it.id+'" class="edit">Редактировать</button>'+
+      '<button data-id="'+it.id+'" class="del">Удалить</button>'+
+      '<button data-id="'+it.id+'" class="clrphoto">Убрать фото</button>'+
+      '</div>';
+    d.querySelector('.del').onclick=async(ev)=>{const id=ev.target.getAttribute('data-id');await fetch(API+'/api/v1/merchant/offers/'+id+'?restaurant_id='+encodeURIComponent(st.rid),{method:'DELETE',headers:auth()});loadOffers();};
+    d.querySelector('.clrphoto').onclick=async(ev)=>{const id=ev.target.getAttribute('data-id');await fetch(API+'/api/v1/merchant/offers/'+id,{method:'POST',headers:{'Content-Type':'application/json',...auth()},body:JSON.stringify({restaurant_id:st.rid,photo_url:null})});loadOffers();};
+    d.querySelector('.edit').onclick=async(ev)=>{
+      const id=ev.target.getAttribute('data-id');
+      const title=prompt('Название', it.title||'')||it.title;
+      const price=parseFloat(prompt('Цена ₽', (it.price_cents/100).toString())|| (it.price_cents/100));
+      const orig=prompt('Старая цена ₽ (пусто если нет)', it.original_price_cents? (it.original_price_cents/100).toString() : '')||'';
+      const expires=prompt('ISO время истечения (UTC)', it.expires_at||'')||it.expires_at;
+      const photo=prompt('Фото URL (пусто чтобы оставить как есть)', it.photo_url||'')||it.photo_url;
+      const body={restaurant_id:st.rid,title,price,original_price:(orig?parseFloat(orig):null),expires_at:expires,photo_url:photo};
+      await fetch(API+'/api/v1/merchant/offers/'+id,{method:'POST',headers:{'Content-Type':'application/json',...auth()},body:JSON.stringify(body)});
+      loadOffers();
+    };
+    el.appendChild(d);
+  }
+}
+window.addEventListener('load',()=>{$('rid').value=st.rid;$('key').value=st.key;loadProfile();});
+</script>

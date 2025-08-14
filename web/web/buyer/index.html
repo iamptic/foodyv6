@@ -1,1 +1,87 @@
-<!doctype html><meta charset="utf-8"><script src="/config.js"></script><h1>Foody Buyer</h1>
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foody — Витрина</title><script src="/config.js"></script>
+<style>
+ body{font-family:Inter,system-ui,Arial,sans-serif;margin:0;background:#0b0c10;color:#eee}
+ header{padding:12px 16px;background:#111;border-bottom:1px solid #222;display:flex;gap:10px;align-items:center}
+ .wrap{max-width:960px;margin:0 auto;padding:16px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+ .card{background:#14161a;border:1px solid #1f232a;border-radius:14px;padding:14px}
+ .title{font-weight:600;margin:0 0 6px}
+ .price{font-size:18px;margin:8px 0}
+ .strike{opacity:.6;text-decoration:line-through;margin-left:8px;font-size:14px}
+ .badge{display:inline-block;padding:4px 8px;border-radius:10px;background:#1f3b2e;color:#8ee59b;font-weight:600;font-size:12px;margin-left:8px}
+ .sub{opacity:.7;font-size:12px} .empty{opacity:.7;padding:40px 0;text-align:center}
+ .toolbar{display:flex;gap:10px;margin-left:auto;align-items:center}
+ button,select{background:#0f1115;border:1px solid #2a2f38;color:#eee;border-radius:10px;padding:6px 10px}
+ .photo{width:100%;height:140px;background:#0f1115;border:1px solid #2a2f38;border-radius:10px;object-fit:cover;margin-bottom:8px}
+ .modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center}
+ .modal > div{background:#14161a;border:1px solid #1f232a;border-radius:14px;padding:16px;max-width:320px}
+</style>
+<header>
+  <div><b>Foody</b> — витрина</div>
+  <div class="toolbar">
+    <select id="sort">
+      <option value="expiry">По времени</option>
+      <option value="price">По цене</option>
+      <option value="new">Новинки</option>
+      <option value="distance">Ближе</option>
+    </select>
+    <button id="geoBtn">Гео</button>
+    <a href="/web/merchant/" style="color:#9ecbff">ЛК →</a>
+  </div>
+</header>
+<div class="wrap">
+  <div id="list" class="grid"></div>
+  <div id="empty" class="empty" style="display:none">Пока нет активных офферов</div>
+</div>
+<div id="modal" class="modal"><div><div id="qrwrap"></div><div id="codetxt" style="margin-top:8px;opacity:.8"></div><div style="margin-top:10px;text-align:right"><button id="closeModal">Закрыть</button></div></div></div>
+<script>
+const API=(window.foodyApi||'').replace(/\/$/,'');
+let GEO=null;
+function money(c){return (c/100).toLocaleString('ru-RU',{style:'currency',currency:'RUB'})}
+function esc(s){return (s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}
+async function fetchOffers(){
+  const params=new URLSearchParams(); params.set('sort', $('sort').value);
+  if(GEO){ params.set('lat', GEO.lat); params.set('lon', GEO.lon); }
+  const r=await fetch(API+'/api/v1/offers?'+params.toString()); const data=await r.json();
+  render(data||[]);
+}
+function $(id){return document.getElementById(id)}
+function card(it){
+  const price=money(it.price_cents_effective ?? it.price_cents);
+  const orig=it.original_price_cents ? '<span class="strike">'+money(it.original_price_cents)+'</span>' : '';
+  const badge=it.timer_step ? '<span class="badge">'+it.timer_step+'</span>' : '';
+  const expires=it.expires_at ? new Date(it.expires_at).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}) : '—';
+  const dist=it.distance_km!=null ? ` • ${it.distance_km.toFixed(1)} км` : '';
+  const img = it.photo_url ? `<img class="photo" src="${esc(it.photo_url)}" alt="">` : '';
+  const el=document.createElement('div'); el.className='card';
+  el.innerHTML = img + `<div class="title">${esc(it.title||'Без названия')}</div>
+    <div class="price">${price}${orig}${badge}</div>
+    <div class="sub">До: ${esc(expires)} • Остаток: ${it.qty_left ?? 0}${dist}</div>
+    <div style="margin-top:10px"><button data-id="${it.id}" class="reserve">Забронировать</button></div>`;
+  el.querySelector('.reserve').onclick = async ()=>{
+    try{
+      const r = await fetch(API+'/api/v1/reservations', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({offer_id: it.id})});
+      const data = await r.json(); if(!r.ok) throw new Error(data.detail||'Ошибка');
+      const img='data:image/png;base64,'+data.qrcode_png_base64;
+      $('qrwrap').innerHTML='<img src="'+img+'" style="width:240px;height:240px;display:block;margin:auto">';
+      $('codetxt').textContent='Код: '+data.code;
+      $('modal').style.display='flex';
+    }catch(e){ alert('Не удалось забронировать: '+e.message); }
+  };
+  return el;
+}
+function render(items){
+  const list=$('list'), empty=$('empty'); list.innerHTML='';
+  if(!items.length){ empty.style.display='block'; return; } empty.style.display='none';
+  for(const it of items){ list.appendChild(card(it)); }
+}
+$('sort').onchange=fetchOffers;
+$('geoBtn').onclick=()=>{
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(pos=>{ GEO={lat: pos.coords.latitude, lon: pos.coords.longitude}; fetchOffers(); }, ()=>alert('Не удалось получить геопозицию'));
+  } else { alert('Геолокация не поддерживается'); }
+};
+$('closeModal').onclick=()=>{ $('modal').style.display='none'; };
+fetchOffers();
+</script>
