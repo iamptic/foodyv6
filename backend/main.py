@@ -9,7 +9,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from backend import bootstrap_sql
+import bootstrap_sql
 
 DB_URL = os.getenv("DATABASE_URL")
 
