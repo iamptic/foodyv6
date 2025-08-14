@@ -1,0 +1,40 @@
+{
+  "info": {
+    "name": "Foody API",
+    "_postman_id": "foody-1755183402",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "{{API}}/health"
+      }
+    },
+    {
+      "name": "Register",
+      "request": {
+        "method": "POST",
+        "url": "{{API}}/api/v1/merchant/register_public",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"title\":\"Пекарня №1\",\"phone\":\"+79991234567\",\"city\":\"Москва\",\"address\":\"Тверская, 1\"}"
+        }
+      }
+    },
+    {
+      "name": "Public offers",
+      "request": {
+        "method": "GET",
+        "url": "{{API}}/api/v1/offers"
+      }
+    }
+  ]
+}
